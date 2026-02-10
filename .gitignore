@@ -2,17 +2,26 @@
 __pycache__/
 *.py[cod]
 *.class
+*.so
+.Python
 venv/
 env/
+ENV/
 
-# Environment
+# Environment variables
 .env
 .env.local
 
 # IDE
 .vscode/
 .idea/
+*.swp
 
 # OS
 .DS_Store
 Thumbs.db
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
