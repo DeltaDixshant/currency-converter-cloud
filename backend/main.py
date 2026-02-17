@@ -1,18 +1,26 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
-from typing import Optional
-from datetime import datetime
+from typing import Optional, List, Dict
+from datetime import datetime, timedelta
 import httpx
 import os
 from dotenv import load_dotenv
+import logging
 
 # Load environment variables
 load_dotenv()
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
 app = FastAPI(
-    title="Currency Converter API",
+    title="Smart Travel Currency & Cost Planner API",
     description="A scalable currency conversion microservice built with FastAPI for cloud deployment",
-    version="1.0.0",
+    version="2.0.0",
     contact={
         "name": "Dixshant Valecha",
         "url": "https://github.com/DeltaDixshant/currency-converter-cloud"
@@ -37,6 +45,35 @@ app.add_middleware(
 API_KEY = os.getenv("EXCHANGE_RATE_API_KEY")
 BASE_URL = os.getenv("EXCHANGE_RATE_BASE_URL", "https://v6.exchangerate-api.com/v6")
 
+# Simple in-memory cache (in production, use Redis)
+cache: Dict[str, Dict] = {}
+CACHE_DURATION = timedelta(minutes=5)
+
+def get_cached_rate(from_curr: str, to_curr: str) -> Optional[float]:
+    """Check if we have a cached exchange rate"""
+    cache_key = f"{from_curr}_{to_curr}"
+    
+    if cache_key in cache:
+        cached_data = cache[cache_key]
+        if datetime.utcnow() < cached_data["expires_at"]:
+            logger.info(f"Cache HIT for {cache_key}")
+            return cached_data["rate"]
+        else:
+            logger.info(f"Cache EXPIRED for {cache_key}")
+            del cache[cache_key]
+    
+    logger.info(f"Cache MISS for {cache_key}")
+    return None
+
+def set_cached_rate(from_curr: str, to_curr: str, rate: float):
+    """Cache an exchange rate"""
+    cache_key = f"{from_curr}_{to_curr}"
+    cache[cache_key] = {
+        "rate": rate,
+        "expires_at": datetime.utcnow() + CACHE_DURATION
+    }
+    logger.info(f"Cached rate for {cache_key}: {rate}")
+
 
 # ==================== DATA MODELS ====================
 
@@ -50,7 +87,7 @@ class APIInfo(BaseModel):
     name: str
     description: str
     version: str
-    endpoints: list[str]
+    endpoints: List[str]
 
 class ConversionRequest(BaseModel):
     """Request model for currency conversion"""
@@ -86,20 +123,82 @@ class ConversionResponse(BaseModel):
     source: str = "ExchangeRate-API"
 
 
+# ==================== MULTI-CURRENCY MODELS ====================
+
+class MultiConversionRequest(BaseModel):
+    """Request model for multi-currency comparison"""
+    base_currency: str = Field(
+        ..., 
+        min_length=3, 
+        max_length=3,
+        description="Base currency code",
+        example="USD"
+    )
+    amount: float = Field(
+        ..., 
+        gt=0,
+        description="Amount to convert",
+        example=1000
+    )
+    target_currencies: List[str] = Field(
+        ...,
+        description="List of currencies to compare",
+        example=["EUR", "GBP", "INR", "JPY", "AUD"]
+    )
+
+class CurrencyComparison(BaseModel):
+    """Individual currency comparison result"""
+    currency: str
+    converted_amount: float
+    exchange_rate: float
+    rank: int
+
+class MultiConversionResponse(BaseModel):
+    """Response model for multi-currency comparison"""
+    base_currency: str
+    base_amount: float
+    comparisons: List[CurrencyComparison]
+    best_value: str
+    total_currencies_compared: int
+    timestamp: str
+
+
 # ==================== ENDPOINTS ====================
 
 @app.get("/", tags=["Root"])
 async def root():
     """Root endpoint - API welcome message"""
     return {
-        "message": "🌍 Currency Converter API - NCI Cloud Computing Project",
+        "message": "🌍 Smart Travel Currency & Cost Planner API",
+        "tagline": "Beyond Simple Currency Conversion!",
         "status": "operational",
         "timestamp": datetime.utcnow().isoformat(),
-        "version": "1.0.0",
+        "version": "2.0.0",
         "author": "Dixshant Valecha",
-        "docs": "/docs",
-        "health": "/health",
-        "convert": "/convert"
+        "project": "NCI MSc Cloud Computing - Scalable Cloud Programming",
+        
+        "unique_features": [
+            "💱 Real-time currency conversion (160+ currencies)",
+            "🔄 Multi-currency comparison (find best rates)",
+            "₿ Cryptocurrency support (coming soon)",
+            "🌤️ Integrated weather data (coming soon)",
+            "💰 Cost of living comparisons (coming soon)"
+        ],
+        
+        "endpoints": {
+            "documentation": "/docs",
+            "health": "/health",
+            "info": "/info",
+            "single_conversion": "POST /convert",
+            "multi_currency_compare": "POST /convert/compare",
+            "supported_currencies": "GET /currencies"
+        },
+        
+        "differentiators": [
+            "✅ Multi-currency comparison (unique!)",
+            "✅ Travel planning focus (unique!)",
+            "✅ Microservices integration ready"
+        ]
     }
 
 
@@ -110,7 +209,7 @@ async def health_check():
         status="healthy",
         service="currency-converter-api",
         timestamp=datetime.utcnow().isoformat(),
-        version="1.0.0"
+        version="2.0.0"
     )
 
 
@@ -118,16 +217,17 @@ async def health_check():
 async def api_info():
     """Get detailed API information and available endpoints"""
     return APIInfo(
-        name="Currency Converter API",
-        description="Microservice-based currency conversion with real-time exchange rates",
-        version="1.0.0",
+        name="Smart Travel Currency & Cost Planner API",
+        description="Microservice-based currency conversion with real-time exchange rates and travel planning features",
+        version="2.0.0",
         endpoints=[
             "GET  /          - Root endpoint",
             "GET  /health    - Health check",
             "GET  /info      - API information",
             "GET  /docs      - Interactive API documentation (Swagger UI)",
             "GET  /redoc     - Alternative API documentation",
-            "POST /convert   - Currency conversion with real-time rates",
+            "POST /convert   - Single currency conversion",
+            "POST /convert/compare - Multi-currency comparison",
             "GET  /currencies - List all supported currencies"
         ]
     )
@@ -145,19 +245,35 @@ async def convert_currency(request: ConversionRequest):
     Returns the converted amount with the current exchange rate.
     """
     
-    # Validate API key exists
     if not API_KEY:
         raise HTTPException(
             status_code=500, 
             detail="API key not configured. Please set EXCHANGE_RATE_API_KEY environment variable."
         )
     
-    # Convert to uppercase for consistency
     from_curr = request.from_currency.upper()
     to_curr = request.to_currency.upper()
     
+    logger.info(f"Conversion request: {from_curr} → {to_curr}, Amount: {request.amount}")
+    
     try:
-        # Call external Exchange Rate API
+        # Check cache first
+        cached_rate = get_cached_rate(from_curr, to_curr)
+        
+        if cached_rate:
+            converted_amount = request.amount * cached_rate
+            
+            return ConversionResponse(
+                from_currency=from_curr,
+                to_currency=to_curr,
+                amount=request.amount,
+                converted_amount=round(converted_amount, 2),
+                exchange_rate=round(cached_rate, 6),
+                timestamp=datetime.utcnow().isoformat(),
+                source="ExchangeRate-API (cached)"
+            )
+        
+        # Cache miss - call external API
         url = f"{BASE_URL}/{API_KEY}/pair/{from_curr}/{to_curr}/{request.amount}"
         
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -165,7 +281,6 @@ async def convert_currency(request: ConversionRequest):
             response.raise_for_status()
             data = response.json()
         
-        # Check if API call was successful
         if data.get("result") != "success":
             error_type = data.get("error-type", "unknown_error")
             
@@ -185,9 +300,11 @@ async def convert_currency(request: ConversionRequest):
                     detail=f"Currency conversion failed: {error_type}"
                 )
         
-        # Extract conversion data
         conversion_rate = data.get("conversion_rate")
         conversion_result = data.get("conversion_result")
+        
+        # Cache the rate
+        set_cached_rate(from_curr, to_curr, conversion_rate)
         
         return ConversionResponse(
             from_currency=from_curr,
@@ -210,6 +327,7 @@ async def convert_currency(request: ConversionRequest):
             detail=f"External API unavailable: {str(e)}"
         )
     except Exception as e:
+        logger.error(f"Conversion error: {e}")
         raise HTTPException(
             status_code=500, 
             detail=f"Internal server error: {str(e)}"
@@ -244,7 +362,6 @@ async def get_supported_currencies():
                 detail="Failed to fetch currency codes."
             )
         
-        # Extract currency codes and names
         supported_codes = data.get("supported_codes", [])
         
         currencies = {
@@ -254,7 +371,7 @@ async def get_supported_currencies():
                     "code": code[0],
                     "name": code[1]
                 }
-                for code in supported_codes[:20]  # Show first 20 as example
+                for code in supported_codes[:20]
             ],
             "note": f"Showing 20 of {len(supported_codes)} total currencies. Full list available via API."
         }
@@ -268,20 +385,118 @@ async def get_supported_currencies():
         )
 
 
+@app.post("/convert/compare", response_model=MultiConversionResponse, tags=["Currency Conversion"])
+async def compare_currencies(request: MultiConversionRequest):
+    """
+    Compare conversion rates across multiple currencies
+    
+    **Use Case:** Find which currency gives you the best value for your money
+    
+    Example: Convert $1000 to EUR, GBP, INR, JPY, AUD and see which gives most value
+    
+    - **base_currency**: Your starting currency (e.g., USD)
+    - **amount**: Amount you want to convert
+    - **target_currencies**: List of currencies to compare
+    
+    Returns ranked list from best to worst exchange rate
+    """
+    
+    if not API_KEY:
+        raise HTTPException(
+            status_code=500, 
+            detail="API key not configured"
+        )
+    
+    base_curr = request.base_currency.upper()
+    comparisons = []
+    
+    logger.info(f"Multi-currency comparison: {base_curr} {request.amount} → {request.target_currencies}")
+    
+    # Convert to each target currency
+    for target_curr in request.target_currencies:
+        target_curr = target_curr.upper()
+        
+        try:
+            # Check cache first
+            cached_rate = get_cached_rate(base_curr, target_curr)
+            
+            if not cached_rate:
+                # Fetch from API
+                url = f"{BASE_URL}/{API_KEY}/pair/{base_curr}/{target_curr}"
+                
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    response = await client.get(url)
+                    response.raise_for_status()
+                    data = response.json()
+                    
+                    if data.get("result") == "success":
+                        cached_rate = data.get("conversion_rate")
+                        set_cached_rate(base_curr, target_curr, cached_rate)
+                        logger.info(f"Fetched rate for {base_curr}/{target_curr}: {cached_rate}")
+            
+            if cached_rate:
+                converted = request.amount * cached_rate
+                comparisons.append({
+                    "currency": target_curr,
+                    "converted_amount": round(converted, 2),
+                    "exchange_rate": round(cached_rate, 6)
+                })
+        
+        except Exception as e:
+            logger.error(f"Error converting {base_curr} to {target_curr}: {e}")
+            continue
+    
+    if not comparisons:
+        raise HTTPException(
+            status_code=400,
+            detail="Could not convert to any of the target currencies"
+        )
+    
+    # Sort by converted amount (descending = best value first)
+    comparisons.sort(key=lambda x: x["converted_amount"], reverse=True)
+    
+    # Add ranking
+    ranked_comparisons = []
+    for idx, comp in enumerate(comparisons, 1):
+        ranked_comparisons.append(
+            CurrencyComparison(
+                currency=comp["currency"],
+                converted_amount=comp["converted_amount"],
+                exchange_rate=comp["exchange_rate"],
+                rank=idx
+            )
+        )
+    
+    # Determine best value
+    best = ranked_comparisons[0] if ranked_comparisons else None
+    best_value = f"{best.currency} ({best.converted_amount})" if best else "N/A"
+    
+    logger.info(f"Comparison complete. Best value: {best_value}")
+    
+    return MultiConversionResponse(
+        base_currency=base_curr,
+        base_amount=request.amount,
+        comparisons=ranked_comparisons,
+        best_value=best_value,
+        total_currencies_compared=len(ranked_comparisons),
+        timestamp=datetime.utcnow().isoformat()
+    )
+
+
 # ==================== STARTUP EVENT ====================
 
 @app.on_event("startup")
 async def startup_event():
     """Runs when the API starts"""
     print("=" * 60)
-    print("🚀 Currency Converter API Started!")
+    print("🚀 Smart Travel Currency & Cost Planner API Started!")
     print("👨‍💻 Developer: Dixshant Valecha")
     print("📚 Documentation: http://localhost:8000/docs")
     print("🏥 Health Check: http://localhost:8000/health")
     print("💱 Convert Currency: POST http://localhost:8000/convert")
+    print("🔄 Multi-Compare: POST http://localhost:8000/convert/compare")
     print("=" * 60)
     
-    # Validate API key on startup
     if not API_KEY:
         print("⚠️  WARNING: EXCHANGE_RATE_API_KEY not set in .env file!")
     else:
