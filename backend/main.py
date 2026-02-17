@@ -162,6 +162,33 @@ class MultiConversionResponse(BaseModel):
     total_currencies_compared: int
     timestamp: str
 
+    # ==================== CRYPTOCURRENCY MODELS ====================
+
+class CryptoPrices(BaseModel):
+    """Current cryptocurrency prices"""
+    symbol: str
+    usd: float
+    eur: float
+    gbp: float
+
+class CryptoResponse(BaseModel):
+    """Response with multiple crypto prices"""
+    bitcoin: CryptoPrices
+    ethereum: CryptoPrices
+    tether: CryptoPrices
+    timestamp: str
+    source: str = "CoinGecko"
+
+class CryptoConversionResponse(BaseModel):
+    """Crypto conversion result"""
+    from_currency: str
+    to_crypto: str
+    fiat_amount: float
+    crypto_amount: float
+    rate: float
+    timestamp: str
+    source: str = "CoinGecko"
+
 
 # ==================== ENDPOINTS ====================
 
@@ -180,7 +207,8 @@ async def root():
         "unique_features": [
             "💱 Real-time currency conversion (160+ currencies)",
             "🔄 Multi-currency comparison (find best rates)",
-            "₿ Cryptocurrency support (coming soon)",
+            "₿ Cryptocurrency support (BTC, ETH, USDT)",
+            "📊 Caching for performance",
             "🌤️ Integrated weather data (coming soon)",
             "💰 Cost of living comparisons (coming soon)"
         ],
@@ -191,6 +219,8 @@ async def root():
             "info": "/info",
             "single_conversion": "POST /convert",
             "multi_currency_compare": "POST /convert/compare",
+            "crypto_prices": "GET /crypto/prices",
+            "crypto_conversion": "POST /convert/crypto",
             "supported_currencies": "GET /currencies"
         },
         
@@ -481,6 +511,182 @@ async def compare_currencies(request: MultiConversionRequest):
         total_currencies_compared=len(ranked_comparisons),
         timestamp=datetime.utcnow().isoformat()
     )
+# ==================== CRYPTOCURRENCY ENDPOINTS ====================
+
+@app.get("/crypto/prices", response_model=CryptoResponse, tags=["Cryptocurrency"])
+async def get_crypto_prices():
+    """
+    Get current cryptocurrency prices in USD, EUR, and GBP
+    
+    **Supported Cryptocurrencies:**
+    - Bitcoin (BTC)
+    - Ethereum (ETH)
+    - Tether (USDT)
+    
+    **No API key required** - uses CoinGecko free tier
+    
+    Returns real-time prices across major fiat currencies
+    """
+    
+    try:
+        url = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,tether&vs_currencies=usd,eur,gbp"
+        
+        logger.info("Fetching crypto prices from CoinGecko")
+        
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(url)
+            response.raise_for_status()
+            data = response.json()
+        
+        logger.info(f"Crypto prices fetched: BTC=${data['bitcoin']['usd']}")
+        
+        return CryptoResponse(
+            bitcoin=CryptoPrices(
+                symbol="BTC",
+                usd=data["bitcoin"]["usd"],
+                eur=data["bitcoin"]["eur"],
+                gbp=data["bitcoin"]["gbp"]
+            ),
+            ethereum=CryptoPrices(
+                symbol="ETH",
+                usd=data["ethereum"]["usd"],
+                eur=data["ethereum"]["eur"],
+                gbp=data["ethereum"]["gbp"]
+            ),
+            tether=CryptoPrices(
+                symbol="USDT",
+                usd=data["tether"]["usd"],
+                eur=data["tether"]["eur"],
+                gbp=data["tether"]["gbp"]
+            ),
+            timestamp=datetime.utcnow().isoformat(),
+            source="CoinGecko"
+        )
+    
+    except httpx.TimeoutException:
+        raise HTTPException(
+            status_code=504,
+            detail="CoinGecko API timeout. Please try again."
+        )
+    except httpx.HTTPError as e:
+        raise HTTPException(
+            status_code=503,
+            detail=f"CoinGecko API unavailable: {str(e)}"
+        )
+    except Exception as e:
+        logger.error(f"Crypto price fetch error: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch crypto prices: {str(e)}"
+        )
+
+
+@app.post("/convert/crypto", response_model=CryptoConversionResponse, tags=["Cryptocurrency"])
+async def convert_to_crypto(
+    from_currency: str = "USD",
+    to_crypto: str = "BTC",
+    amount: float = 1000
+):
+    """
+    Convert fiat currency to cryptocurrency
+    
+    **Supported Fiat Currencies:** USD, EUR, GBP
+    
+    **Supported Cryptocurrencies:**
+    - BTC (Bitcoin)
+    - ETH (Ethereum)
+    - USDT (Tether)
+    
+    **Example:** How much Bitcoin can I buy with $1000?
+    
+    - **from_currency**: Fiat currency (USD, EUR, GBP)
+    - **to_crypto**: Cryptocurrency (BTC, ETH, USDT)
+    - **amount**: Amount of fiat currency to convert
+    
+    Returns the equivalent cryptocurrency amount at current market rates
+    """
+    
+    # Map crypto symbols to CoinGecko IDs
+    crypto_map = {
+        "BTC": "bitcoin",
+        "ETH": "ethereum",
+        "USDT": "tether"
+    }
+    
+    to_crypto_upper = to_crypto.upper()
+    from_currency_upper = from_currency.upper()
+    
+    if to_crypto_upper not in crypto_map:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cryptocurrency '{to_crypto}' not supported. Use: BTC, ETH, or USDT"
+        )
+    
+    if from_currency_upper not in ["USD", "EUR", "GBP"]:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Fiat currency '{from_currency}' not supported. Use: USD, EUR, or GBP"
+        )
+    
+    if amount <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Amount must be positive"
+        )
+    
+    crypto_id = crypto_map[to_crypto_upper]
+    currency_lower = from_currency_upper.lower()
+    
+    try:
+        url = f"https://api.coingecko.com/api/v3/simple/price?ids={crypto_id}&vs_currencies={currency_lower}"
+        
+        logger.info(f"Converting {amount} {from_currency_upper} to {to_crypto_upper}")
+        
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(url)
+            response.raise_for_status()
+            data = response.json()
+        
+        # Price of 1 crypto in fiat currency
+        crypto_price = data[crypto_id][currency_lower]
+        
+        # How much crypto can you buy
+        crypto_amount = amount / crypto_price
+        
+        logger.info(f"Conversion: {amount} {from_currency_upper} = {crypto_amount:.8f} {to_crypto_upper}")
+        
+        return CryptoConversionResponse(
+            from_currency=from_currency_upper,
+            to_crypto=to_crypto_upper,
+            fiat_amount=amount,
+            crypto_amount=round(crypto_amount, 8),
+            rate=round(crypto_price, 2),
+            timestamp=datetime.utcnow().isoformat(),
+            source="CoinGecko"
+        )
+    
+    except httpx.TimeoutException:
+        raise HTTPException(
+            status_code=504,
+            detail="CoinGecko API timeout. Please try again."
+        )
+    except httpx.HTTPError as e:
+        raise HTTPException(
+            status_code=503,
+            detail=f"CoinGecko API unavailable: {str(e)}"
+        )
+    except KeyError as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Invalid response from CoinGecko: {str(e)}"
+        )
+    except Exception as e:
+        logger.error(f"Crypto conversion error: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Crypto conversion failed: {str(e)}"
+        )
+
 
 
 # ==================== STARTUP EVENT ====================
