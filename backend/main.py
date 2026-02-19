@@ -6,6 +6,7 @@ import httpx
 import os
 from dotenv import load_dotenv
 import logging
+from enum import Enum
 
 # Load environment variables
 load_dotenv()
@@ -17,10 +18,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# ==================== CHANGE 1: Updated App Metadata ====================
 app = FastAPI(
-    title="Smart Travel Currency & Cost Planner API",
-    description="A scalable currency conversion microservice built with FastAPI for cloud deployment",
-    version="2.0.0",
+    title="CryptoFiat Bridge API",  # ✏️ CHANGED: New name
+    description="Seamless conversion between traditional and digital currencies",  # ✏️ CHANGED
+    version="3.0.0",  # ✏️ CHANGED: Version bump
     contact={
         "name": "Dixshant Valecha",
         "url": "https://github.com/DeltaDixshant/currency-converter-cloud"
@@ -75,7 +77,67 @@ def set_cached_rate(from_curr: str, to_curr: str, rate: float):
     logger.info(f"Cached rate for {cache_key}: {rate}")
 
 
-# ==================== DATA MODELS ====================
+# ==================== CHANGE 2: NEW CRYPTO MAPPING ====================
+# ✨ NEW: Comprehensive crypto symbol to CoinGecko ID mapping
+CRYPTO_ID_MAP = {
+    "BTC": "bitcoin",
+    "ETH": "ethereum",
+    "USDT": "tether",
+    "BNB": "binancecoin",
+    "XRP": "ripple",
+    "ADA": "cardano",
+    "SOL": "solana",
+    "DOT": "polkadot",
+    "DOGE": "dogecoin",
+    "MATIC": "matic-network",
+    "LINK": "chainlink",
+    "LTC": "litecoin",
+    "BCH": "bitcoin-cash",
+    "AVAX": "avalanche-2",
+    "SHIB": "shiba-inu",
+    "UNI": "uniswap",
+    "ATOM": "cosmos",
+    "TON": "the-open-network",
+    "TRX": "tron",
+    "DAI": "dai"
+}
+
+# ✨ NEW: Helper function to get crypto ID
+def get_crypto_id(symbol: str) -> str:
+    """Convert symbol to CoinGecko ID"""
+    symbol_upper = symbol.upper()
+    if symbol_upper in CRYPTO_ID_MAP:
+        return CRYPTO_ID_MAP[symbol_upper]
+    raise HTTPException(
+        status_code=400,
+        detail=f"Cryptocurrency '{symbol}' not supported. Use: {', '.join(CRYPTO_ID_MAP.keys())}"
+    )
+
+# ✨ NEW: Helper function to fetch crypto prices
+async def fetch_crypto_prices(crypto_ids: List[str], vs_currencies: List[str]) -> Dict:
+    """Fetch prices for multiple cryptos"""
+    ids_str = ",".join(crypto_ids)
+    currencies_str = ",".join(vs_currencies)
+    
+    url = f"https://api.coingecko.com/api/v3/simple/price?ids={ids_str}&vs_currencies={currencies_str}&include_24hr_change=true&include_market_cap=true&include_24hr_vol=true"
+    
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        response = await client.get(url)
+        response.raise_for_status()
+        return response.json()
+
+# ✨ NEW: Helper function for detailed crypto data
+async def fetch_detailed_crypto_data(crypto_id: str) -> Dict:
+    """Fetch detailed data for a single cryptocurrency"""
+    url = f"https://api.coingecko.com/api/v3/coins/{crypto_id}?localization=false&tickers=false&community_data=false&developer_data=false"
+    
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        response = await client.get(url)
+        response.raise_for_status()
+        return response.json()
+
+
+# ==================== DATA MODELS (Existing) ====================
 
 class HealthResponse(BaseModel):
     status: str
@@ -123,7 +185,7 @@ class ConversionResponse(BaseModel):
     source: str = "ExchangeRate-API"
 
 
-# ==================== MULTI-CURRENCY MODELS ====================
+# ==================== MULTI-CURRENCY MODELS (Existing) ====================
 
 class MultiConversionRequest(BaseModel):
     """Request model for multi-currency comparison"""
@@ -162,8 +224,89 @@ class MultiConversionResponse(BaseModel):
     total_currencies_compared: int
     timestamp: str
 
-    # ==================== CRYPTOCURRENCY MODELS ====================
 
+# ==================== CHANGE 3: ENHANCED CRYPTO MODELS ====================
+
+# ✨ NEW: Enum for supported cryptos
+class CryptoSymbol(str, Enum):
+    """Supported cryptocurrencies"""
+    BTC = "bitcoin"
+    ETH = "ethereum"
+    USDT = "tether"
+    BNB = "binancecoin"
+    XRP = "ripple"
+    ADA = "cardano"
+    SOL = "solana"
+    DOT = "polkadot"
+    DOGE = "dogecoin"
+    MATIC = "matic-network"
+    LINK = "chainlink"
+    LTC = "litecoin"
+    BCH = "bitcoin-cash"
+    AVAX = "avalanche-2"
+    SHIB = "shiba-inu"
+    UNI = "uniswap"
+    ATOM = "cosmos"
+    TON = "the-open-network"
+    TRX = "tron"
+    DAI = "dai"
+
+# ✨ NEW: Enum for fiat currencies
+class FiatCurrency(str, Enum):
+    """Supported fiat currencies"""
+    USD = "usd"
+    EUR = "eur"
+    GBP = "gbp"
+    JPY = "jpy"
+    AUD = "aud"
+    CAD = "cad"
+    CHF = "chf"
+    INR = "inr"
+
+# ✨ NEW: Model for crypto list response
+class CryptoListResponse(BaseModel):
+    """List of supported cryptocurrencies"""
+    total_cryptos: int
+    currencies: List[Dict[str, str]]
+    supported_fiats: List[str]
+    timestamp: str
+
+# ✨ NEW: Crypto-to-Crypto conversion models
+class CryptoToCryptoRequest(BaseModel):
+    """Request for crypto-to-crypto conversion"""
+    from_crypto: str = Field(..., example="BTC", description="Source cryptocurrency (e.g., BTC, ETH)")
+    to_crypto: str = Field(..., example="ETH", description="Target cryptocurrency (e.g., ETH, USDT)")
+    amount: float = Field(..., gt=0, example=0.5, description="Amount of source crypto")
+
+class CryptoToCryptoResponse(BaseModel):
+    """Response for crypto-to-crypto conversion"""
+    from_crypto: str
+    to_crypto: str
+    from_amount: float
+    to_amount: float
+    exchange_rate: float
+    usd_value: float
+    timestamp: str
+    source: str = "CoinGecko"
+
+# ✨ NEW: Crypto-to-Fiat conversion models
+class CryptoToFiatRequest(BaseModel):
+    """Request for crypto-to-fiat conversion"""
+    crypto: str = Field(..., example="BTC", description="Cryptocurrency symbol (e.g., BTC)")
+    fiat: str = Field(..., example="USD", description="Fiat currency (e.g., USD, EUR)")
+    amount: float = Field(..., gt=0, example=0.5, description="Amount of cryptocurrency")
+
+class CryptoToFiatResponse(BaseModel):
+    """Response for crypto-to-fiat conversion"""
+    crypto: str
+    fiat: str
+    crypto_amount: float
+    fiat_amount: float
+    rate: float
+    timestamp: str
+    source: str = "CoinGecko"
+
+# Existing crypto models (keeping for compatibility)
 class CryptoPrices(BaseModel):
     """Current cryptocurrency prices"""
     symbol: str
@@ -190,44 +333,78 @@ class CryptoConversionResponse(BaseModel):
     source: str = "CoinGecko"
 
 
-# ==================== ENDPOINTS ====================
+# ==================== CHANGE 4: UPDATED ROOT ENDPOINT ====================
 
 @app.get("/", tags=["Root"])
 async def root():
     """Root endpoint - API welcome message"""
     return {
-        "message": "🌍 Smart Travel Currency & Cost Planner API",
-        "tagline": "Beyond Simple Currency Conversion!",
+        "message": "₿ CryptoFiat Bridge API",  # ✏️ CHANGED: New name
+        "tagline": "Seamless Conversion Between Traditional & Digital Currencies",  # ✏️ CHANGED
         "status": "operational",
         "timestamp": datetime.utcnow().isoformat(),
-        "version": "2.0.0",
+        "version": "3.0.0",  # ✏️ CHANGED
         "author": "Dixshant Valecha",
         "project": "NCI MSc Cloud Computing - Scalable Cloud Programming",
         
-        "unique_features": [
-            "💱 Real-time currency conversion (160+ currencies)",
-            "🔄 Multi-currency comparison (find best rates)",
-            "₿ Cryptocurrency support (BTC, ETH, USDT)",
-            "📊 Caching for performance",
-            "🌤️ Integrated weather data (coming soon)",
-            "💰 Cost of living comparisons (coming soon)"
+        # ✏️ CHANGED: Updated feature list
+        "core_features": [
+            "💱 Traditional currency conversion (160+ currencies)",
+            "₿ Cryptocurrency prices (20+ cryptos)",
+            "🔄 Crypto-to-crypto conversion (BTC→ETH, etc.)",
+            "💰 Crypto-to-fiat conversion (BTC→USD, etc.)",
+            "💵 Fiat-to-crypto conversion (USD→BTC, etc.)",
+            "📊 Detailed crypto market data",
+            "📈 Multi-currency comparison",
+            "⚡ High-performance caching"
         ],
         
+        # ✨ NEW: List all supported cryptos
+        "supported_cryptocurrencies": [
+            "BTC", "ETH", "USDT", "BNB", "XRP", "ADA", "SOL", "DOT", 
+            "DOGE", "MATIC", "LINK", "LTC", "BCH", "AVAX", "SHIB", 
+            "UNI", "ATOM", "TON", "TRX", "DAI"
+        ],
+        
+        # ✨ NEW: List supported fiats
+        "supported_fiats": ["USD", "EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "INR"],
+        
+        # ✏️ CHANGED: Updated endpoints
         "endpoints": {
             "documentation": "/docs",
             "health": "/health",
             "info": "/info",
-            "single_conversion": "POST /convert",
-            "multi_currency_compare": "POST /convert/compare",
-            "crypto_prices": "GET /crypto/prices",
-            "crypto_conversion": "POST /convert/crypto",
-            "supported_currencies": "GET /currencies"
+            
+            "crypto_list": "GET /crypto/list",
+            "crypto_prices_basic": "GET /crypto/prices",
+            "crypto_prices_multi": "GET /crypto/prices/multi",
+            "crypto_details": "GET /crypto/details/{symbol}",
+            
+            "fiat_to_crypto": "POST /convert/crypto",
+            "crypto_to_fiat": "POST /crypto/to-fiat",
+            "crypto_to_crypto": "POST /crypto/convert",
+            
+            "traditional_convert": "POST /convert",
+            "multi_compare": "POST /convert/compare",
+            "currencies": "GET /currencies"
         },
         
-        "differentiators": [
-            "✅ Multi-currency comparison (unique!)",
-            "✅ Travel planning focus (unique!)",
-            "✅ Microservices integration ready"
+        # ✨ NEW: Use cases
+        "use_cases": [
+            "🏦 Investment planning - Calculate crypto portfolio value",
+            "💸 Trading - Quick crypto-to-crypto conversions",
+            "🌍 International - Convert between any currency",
+            "📊 Market analysis - Track prices and trends",
+            "🎓 Education - Learn crypto market dynamics"
+        ],
+        
+        # ✏️ CHANGED: Updated USPs
+        "unique_selling_points": [
+            "✅ 20+ cryptocurrencies supported",
+            "✅ Bidirectional conversions (fiat↔crypto, crypto↔crypto)",
+            "✅ Real-time market data",
+            "✅ Detailed crypto information",
+            "✅ Production-ready API design"
         ]
     }
 
@@ -237,31 +414,44 @@ async def health_check():
     """Health check endpoint for monitoring and load balancers"""
     return HealthResponse(
         status="healthy",
-        service="currency-converter-api",
+        service="cryptofiat-bridge-api",  # ✏️ CHANGED: New service name
         timestamp=datetime.utcnow().isoformat(),
-        version="2.0.0"
+        version="3.0.0"  # ✏️ CHANGED
     )
 
 
+# ✏️ CHANGED: Updated info endpoint
 @app.get("/info", response_model=APIInfo, tags=["Information"])
 async def api_info():
     """Get detailed API information and available endpoints"""
     return APIInfo(
-        name="Smart Travel Currency & Cost Planner API",
-        description="Microservice-based currency conversion with real-time exchange rates and travel planning features",
-        version="2.0.0",
+        name="CryptoFiat Bridge API",
+        description="Bidirectional conversion between traditional and digital currencies with real-time market data",
+        version="3.0.0",
         endpoints=[
             "GET  /          - Root endpoint",
             "GET  /health    - Health check",
             "GET  /info      - API information",
             "GET  /docs      - Interactive API documentation (Swagger UI)",
             "GET  /redoc     - Alternative API documentation",
+            
             "POST /convert   - Single currency conversion",
             "POST /convert/compare - Multi-currency comparison",
-            "GET  /currencies - List all supported currencies"
+            "GET  /currencies - List all supported fiat currencies",
+            
+            "GET  /crypto/list - List all supported cryptocurrencies",
+            "GET  /crypto/prices - Basic crypto prices (BTC, ETH, USDT)",
+            "GET  /crypto/prices/multi - Multiple crypto prices",
+            "GET  /crypto/details/{symbol} - Detailed crypto information",
+            
+            "POST /convert/crypto - Fiat to crypto conversion",
+            "POST /crypto/to-fiat - Crypto to fiat conversion",
+            "POST /crypto/convert - Crypto to crypto conversion"
         ]
     )
 
+
+# ==================== EXISTING ENDPOINTS (Unchanged) ====================
 
 @app.post("/convert", response_model=ConversionResponse, tags=["Currency Conversion"])
 async def convert_currency(request: ConversionRequest):
@@ -287,7 +477,6 @@ async def convert_currency(request: ConversionRequest):
     logger.info(f"Conversion request: {from_curr} → {to_curr}, Amount: {request.amount}")
     
     try:
-        # Check cache first
         cached_rate = get_cached_rate(from_curr, to_curr)
         
         if cached_rate:
@@ -303,7 +492,6 @@ async def convert_currency(request: ConversionRequest):
                 source="ExchangeRate-API (cached)"
             )
         
-        # Cache miss - call external API
         url = f"{BASE_URL}/{API_KEY}/pair/{from_curr}/{to_curr}/{request.amount}"
         
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -333,7 +521,6 @@ async def convert_currency(request: ConversionRequest):
         conversion_rate = data.get("conversion_rate")
         conversion_result = data.get("conversion_result")
         
-        # Cache the rate
         set_cached_rate(from_curr, to_curr, conversion_rate)
         
         return ConversionResponse(
@@ -442,16 +629,13 @@ async def compare_currencies(request: MultiConversionRequest):
     
     logger.info(f"Multi-currency comparison: {base_curr} {request.amount} → {request.target_currencies}")
     
-    # Convert to each target currency
     for target_curr in request.target_currencies:
         target_curr = target_curr.upper()
         
         try:
-            # Check cache first
             cached_rate = get_cached_rate(base_curr, target_curr)
             
             if not cached_rate:
-                # Fetch from API
                 url = f"{BASE_URL}/{API_KEY}/pair/{base_curr}/{target_curr}"
                 
                 async with httpx.AsyncClient(timeout=10.0) as client:
@@ -482,10 +666,8 @@ async def compare_currencies(request: MultiConversionRequest):
             detail="Could not convert to any of the target currencies"
         )
     
-    # Sort by converted amount (descending = best value first)
     comparisons.sort(key=lambda x: x["converted_amount"], reverse=True)
     
-    # Add ranking
     ranked_comparisons = []
     for idx, comp in enumerate(comparisons, 1):
         ranked_comparisons.append(
@@ -497,7 +679,6 @@ async def compare_currencies(request: MultiConversionRequest):
             )
         )
     
-    # Determine best value
     best = ranked_comparisons[0] if ranked_comparisons else None
     best_value = f"{best.currency} ({best.converted_amount})" if best else "N/A"
     
@@ -511,7 +692,248 @@ async def compare_currencies(request: MultiConversionRequest):
         total_currencies_compared=len(ranked_comparisons),
         timestamp=datetime.utcnow().isoformat()
     )
-# ==================== CRYPTOCURRENCY ENDPOINTS ====================
+
+
+# ==================== CHANGE 5: NEW CRYPTO ENDPOINTS ====================
+
+# ✨ NEW: List all supported cryptocurrencies
+@app.get("/crypto/list", response_model=CryptoListResponse, tags=["Cryptocurrency"])
+async def list_cryptocurrencies():
+    """
+    Get list of all supported cryptocurrencies
+    
+    Returns comprehensive list of supported cryptocurrencies and fiat currencies
+    """
+    
+    currencies = [
+        {"symbol": symbol, "name": name, "id": CRYPTO_ID_MAP[symbol]}
+        for symbol, name in [
+            ("BTC", "Bitcoin"),
+            ("ETH", "Ethereum"),
+            ("USDT", "Tether"),
+            ("BNB", "Binance Coin"),
+            ("XRP", "Ripple"),
+            ("ADA", "Cardano"),
+            ("SOL", "Solana"),
+            ("DOT", "Polkadot"),
+            ("DOGE", "Dogecoin"),
+            ("MATIC", "Polygon"),
+            ("LINK", "Chainlink"),
+            ("LTC", "Litecoin"),
+            ("BCH", "Bitcoin Cash"),
+            ("AVAX", "Avalanche"),
+            ("SHIB", "Shiba Inu"),
+            ("UNI", "Uniswap"),
+            ("ATOM", "Cosmos"),
+            ("TON", "Toncoin"),
+            ("TRX", "TRON"),
+            ("DAI", "Dai")
+        ]
+    ]
+    
+    return CryptoListResponse(
+        total_cryptos=len(currencies),
+        currencies=currencies,
+        supported_fiats=["USD", "EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "INR"],
+        timestamp=datetime.utcnow().isoformat()
+    )
+
+
+# ✨ NEW: Get multiple crypto prices
+@app.get("/crypto/prices/multi", tags=["Cryptocurrency"])
+async def get_multiple_crypto_prices(
+    symbols: str = "BTC,ETH,USDT,ADA,SOL",
+    vs_currency: str = "usd"
+):
+    """
+    Get current prices for multiple cryptocurrencies
+    
+    - **symbols**: Comma-separated crypto symbols (e.g., "BTC,ETH,USDT")
+    - **vs_currency**: Fiat currency (usd, eur, gbp, etc.)
+    
+    Example: /crypto/prices/multi?symbols=BTC,ETH,SOL&vs_currency=usd
+    """
+    
+    try:
+        symbol_list = [s.strip().upper() for s in symbols.split(",")]
+        crypto_ids = [get_crypto_id(symbol) for symbol in symbol_list]
+        
+        data = await fetch_crypto_prices(crypto_ids, [vs_currency.lower()])
+        
+        result = {}
+        for symbol, crypto_id in zip(symbol_list, crypto_ids):
+            if crypto_id in data:
+                crypto_data = data[crypto_id]
+                result[symbol] = {
+                    "price": crypto_data.get(vs_currency.lower()),
+                    "market_cap": crypto_data.get(f"{vs_currency.lower()}_market_cap"),
+                    "24h_volume": crypto_data.get(f"{vs_currency.lower()}_24h_vol"),
+                    "24h_change": crypto_data.get(f"{vs_currency.lower()}_24h_change")
+                }
+        
+        return {
+            "data": result,
+            "vs_currency": vs_currency.upper(),
+            "timestamp": datetime.utcnow().isoformat(),
+            "source": "CoinGecko"
+        }
+    
+    except Exception as e:
+        logger.error(f"Error fetching multiple crypto prices: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ✨ NEW: Crypto-to-Crypto conversion
+@app.post("/crypto/convert", response_model=CryptoToCryptoResponse, tags=["Cryptocurrency"])
+async def convert_crypto_to_crypto(request: CryptoToCryptoRequest):
+    """
+    Convert one cryptocurrency to another
+    
+    **Example:** How much ETH can I get for 0.5 BTC?
+    
+    - **from_crypto**: Source cryptocurrency (BTC, ETH, etc.)
+    - **to_crypto**: Target cryptocurrency (ETH, USDT, etc.)
+    - **amount**: Amount of source crypto
+    
+    Returns equivalent amount in target cryptocurrency
+    """
+    
+    try:
+        from_id = get_crypto_id(request.from_crypto)
+        to_id = get_crypto_id(request.to_crypto)
+        
+        crypto_ids = [from_id, to_id]
+        data = await fetch_crypto_prices(crypto_ids, ["usd"])
+        
+        from_price_usd = data[from_id]["usd"]
+        to_price_usd = data[to_id]["usd"]
+        
+        usd_value = request.amount * from_price_usd
+        to_amount = usd_value / to_price_usd
+        exchange_rate = from_price_usd / to_price_usd
+        
+        logger.info(f"Crypto conversion: {request.amount} {request.from_crypto} = {to_amount} {request.to_crypto}")
+        
+        return CryptoToCryptoResponse(
+            from_crypto=request.from_crypto.upper(),
+            to_crypto=request.to_crypto.upper(),
+            from_amount=request.amount,
+            to_amount=round(to_amount, 8),
+            exchange_rate=round(exchange_rate, 8),
+            usd_value=round(usd_value, 2),
+            timestamp=datetime.utcnow().isoformat()
+        )
+    
+    except Exception as e:
+        logger.error(f"Crypto-to-crypto conversion error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ✨ NEW: Crypto-to-Fiat conversion
+@app.post("/crypto/to-fiat", response_model=CryptoToFiatResponse, tags=["Cryptocurrency"])
+async def convert_crypto_to_fiat(request: CryptoToFiatRequest):
+    """
+    Convert cryptocurrency to fiat currency
+    
+    **Example:** I have 0.5 BTC, how much USD is that?
+    
+    - **crypto**: Cryptocurrency symbol (BTC, ETH, etc.)
+    - **fiat**: Fiat currency (USD, EUR, GBP, etc.)
+    - **amount**: Amount of cryptocurrency
+    
+    Returns equivalent amount in fiat currency
+    """
+    
+    try:
+        crypto_id = get_crypto_id(request.crypto)
+        fiat_lower = request.fiat.lower()
+        
+        if fiat_lower not in ["usd", "eur", "gbp", "jpy", "aud", "cad", "chf", "inr"]:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Fiat currency '{request.fiat}' not supported"
+            )
+        
+        data = await fetch_crypto_prices([crypto_id], [fiat_lower])
+        
+        crypto_price = data[crypto_id][fiat_lower]
+        fiat_amount = request.amount * crypto_price
+        
+        logger.info(f"Crypto to fiat: {request.amount} {request.crypto} = {fiat_amount} {request.fiat}")
+        
+        return CryptoToFiatResponse(
+            crypto=request.crypto.upper(),
+            fiat=request.fiat.upper(),
+            crypto_amount=request.amount,
+            fiat_amount=round(fiat_amount, 2),
+            rate=round(crypto_price, 2),
+            timestamp=datetime.utcnow().isoformat()
+        )
+    
+    except Exception as e:
+        logger.error(f"Crypto to fiat conversion error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ✨ NEW: Detailed crypto information
+@app.get("/crypto/details/{symbol}", tags=["Cryptocurrency"])
+async def get_crypto_details(symbol: str):
+    """
+    Get detailed information about a cryptocurrency
+    
+    **Example:** /crypto/details/BTC
+    
+    Returns comprehensive data including:
+    - Current price, market cap, volume
+    - 24h price change
+    - All-time high/low
+    - Circulating/total/max supply
+    - Market rank
+    """
+    
+    try:
+        crypto_id = get_crypto_id(symbol)
+        data = await fetch_detailed_crypto_data(crypto_id)
+        
+        market_data = data.get("market_data", {})
+        
+        return {
+            "symbol": symbol.upper(),
+            "name": data.get("name"),
+            "description": data.get("description", {}).get("en", "")[:200] + "..." if data.get("description") else None,
+            "current_price": {
+                "usd": market_data.get("current_price", {}).get("usd"),
+                "eur": market_data.get("current_price", {}).get("eur"),
+                "gbp": market_data.get("current_price", {}).get("gbp")
+            },
+            "market_cap": market_data.get("market_cap", {}).get("usd"),
+            "market_cap_rank": data.get("market_cap_rank"),
+            "total_volume": market_data.get("total_volume", {}).get("usd"),
+            "price_change_24h": market_data.get("price_change_24h"),
+            "price_change_percentage_24h": market_data.get("price_change_percentage_24h"),
+            "price_change_percentage_7d": market_data.get("price_change_percentage_7d"),
+            "price_change_percentage_30d": market_data.get("price_change_percentage_30d"),
+            "circulating_supply": market_data.get("circulating_supply"),
+            "total_supply": market_data.get("total_supply"),
+            "max_supply": market_data.get("max_supply"),
+            "ath": {
+                "usd": market_data.get("ath", {}).get("usd"),
+                "date": market_data.get("ath_date", {}).get("usd")
+            },
+            "atl": {
+                "usd": market_data.get("atl", {}).get("usd"),
+                "date": market_data.get("atl_date", {}).get("usd")
+            },
+            "last_updated": data.get("last_updated"),
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    
+    except Exception as e:
+        logger.error(f"Error fetching crypto details: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== EXISTING CRYPTO ENDPOINTS ====================
 
 @app.get("/crypto/prices", response_model=CryptoResponse, tags=["Cryptocurrency"])
 async def get_crypto_prices():
@@ -606,7 +1028,6 @@ async def convert_to_crypto(
     Returns the equivalent cryptocurrency amount at current market rates
     """
     
-    # Map crypto symbols to CoinGecko IDs
     crypto_map = {
         "BTC": "bitcoin",
         "ETH": "ethereum",
@@ -647,10 +1068,7 @@ async def convert_to_crypto(
             response.raise_for_status()
             data = response.json()
         
-        # Price of 1 crypto in fiat currency
         crypto_price = data[crypto_id][currency_lower]
-        
-        # How much crypto can you buy
         crypto_amount = amount / crypto_price
         
         logger.info(f"Conversion: {amount} {from_currency_upper} = {crypto_amount:.8f} {to_crypto_upper}")
@@ -688,28 +1106,30 @@ async def convert_to_crypto(
         )
 
 
-
-# ==================== STARTUP EVENT ====================
+# ==================== CHANGE 6: UPDATED STARTUP EVENT ====================
 
 @app.on_event("startup")
 async def startup_event():
     """Runs when the API starts"""
     print("=" * 60)
-    print("🚀 Smart Travel Currency & Cost Planner API Started!")
+    print("₿ CryptoFiat Bridge API Started!")  # ✏️ CHANGED
     print("👨‍💻 Developer: Dixshant Valecha")
     print("📚 Documentation: http://localhost:8000/docs")
     print("🏥 Health Check: http://localhost:8000/health")
-    print("💱 Convert Currency: POST http://localhost:8000/convert")
-    print("🔄 Multi-Compare: POST http://localhost:8000/convert/compare")
+    print("💱 Fiat Convert: POST http://localhost:8000/convert")
+    print("₿ Crypto Prices: GET http://localhost:8000/crypto/prices")  # ✏️ CHANGED
+    print("🔄 Crypto Convert: POST http://localhost:8000/crypto/convert")  # ✨ NEW
     print("=" * 60)
     
     if not API_KEY:
         print("⚠️  WARNING: EXCHANGE_RATE_API_KEY not set in .env file!")
     else:
         print(f"✅ Exchange Rate API Key: Configured ({API_KEY[:8]}...)")
+    
+    print(f"✅ Supported Cryptos: {len(CRYPTO_ID_MAP)} currencies")  # ✨ NEW
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
     """Runs when the API shuts down"""
-    print("👋 Currency Converter API Shutting Down...")
+    print("👋 CryptoFiat Bridge API Shutting Down...")  # ✏️ CHANGED
